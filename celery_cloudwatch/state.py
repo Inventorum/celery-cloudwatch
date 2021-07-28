@@ -1,7 +1,6 @@
 import sys
 import threading
 import traceback
-from builtins import property as _property, tuple as _tuple
 from collections import defaultdict, OrderedDict
 from operator import itemgetter as _itemgetter
 
@@ -17,6 +16,7 @@ class State(object):
 
         # track the number of events in the current window
         self.task_event_sent = defaultdict(int)
+        self.task_event_received = defaultdict(int)
         self.task_event_started = defaultdict(int)
         self.task_event_succeeded = defaultdict(int)
         self.task_event_failed = defaultdict(int)
@@ -70,7 +70,7 @@ class State(object):
             uuid = event['uuid']
             if uuid not in self.registry:
                 task_name = event['name']
-                self.registry[uuid] = TaskRecord(task_name, event['timestamp'], None, None, None)
+                self.registry[uuid] = TaskRecord(task_name, event['timestamp'], None, None, None, None)
                 self.task_event_sent[task_name] += 1
                 return
 
@@ -95,19 +95,46 @@ class State(object):
             else:
                 self.task_event_failed[task_record.name] += 1
 
+    def task_received(self, event):
+        with self._mutex:
+            uuid = event['uuid']
+            if uuid not in self.registry:
+                task_name = event['name']
+                self.registry[uuid] = TaskRecord(task_name, None, None, None, None, event['timestamp'])
+                self.task_event_received[task_name] += 1
+                return
+
+            task_record = self.registry[uuid]._replace(
+                name=event['name'],
+                sent_at=event['timestamp']
+            )
+            self.registry[uuid] = task_record
+            self.task_event_received[task_record.name] += 1
+
+            if task_record.started_at is None:
+                return
+
+            self.task_event_started[task_record.name] += 1
+            self.time_to_start[task_record.name] += task_record.wait_duration
+            if not task_record.finished:
+                return
+            del self.registry[uuid]
+            if task_record.successful:
+                self.task_event_succeeded[task_record.name] += 1
+                self.time_to_process[task_record.name] += task_record.processing_duration
+            else:
+                self.task_event_failed[task_record.name] += 1
+
     def task_started(self, event):
         with self._mutex:
             uuid = event['uuid']
             task_record = self.registry.get(uuid, None)
             if task_record is None:
-                self.registry[uuid] = TaskRecord(None, None, event['timestamp'], None, None)
+                self.registry[uuid] = TaskRecord(None, None, event['timestamp'], None, None, None)
                 return
 
             task_record = task_record._replace(started_at=event['timestamp'])
             self.registry[uuid] = task_record
-
-            if task_record.sent_at is None:
-                return
 
             self.task_event_started[task_record.name] += 1
             self.time_to_start[task_record.name] += task_record.wait_duration
@@ -125,12 +152,12 @@ class State(object):
             uuid = event['uuid']
             task_record = self.registry.get(uuid, None)
             if task_record is None:
-                self.registry[uuid] = TaskRecord(None, None, None, event['timestamp'], None)
+                self.registry[uuid] = TaskRecord(None, None, None, event['timestamp'], None, None)
                 return
 
             task_record = task_record._replace(succeeded_at=event['timestamp'])
 
-            if task_record.sent_at is None or task_record.started_at is None:
+            if task_record.sent_at is None and task_record.started_at is None:
                 self.registry[uuid] = task_record
                 return
             del self.registry[uuid]
@@ -142,12 +169,12 @@ class State(object):
             uuid = event['uuid']
             task_record = self.registry.get(uuid, None)
             if task_record is None:
-                self.registry[uuid] = TaskRecord(None, None, None, None, event['timestamp'])
+                self.registry[uuid] = TaskRecord(None, None, None, None, event['timestamp'], None)
                 return
 
             task_record = task_record._replace(failed_at=event['timestamp'])
 
-            if task_record.sent_at is None or task_record.started_at is None:
+            if task_record.sent_at is None and task_record.started_at is None:
                 self.registry[uuid] = task_record
                 return
             del self.registry[uuid]
@@ -155,34 +182,34 @@ class State(object):
 
 
 class TaskRecord(tuple):
-    'TaskRecord(name, sent_at, started_at, succeeded_at, failed_at)'
+    'TaskRecord(name, sent_at, started_at, succeeded_at, failed_at, received_at)'
 
     __slots__ = ()
 
-    _fields = ('name', 'sent_at', 'started_at', 'succeeded_at', 'failed_at')
+    _fields = ('name', 'sent_at', 'started_at', 'succeeded_at', 'failed_at', 'received_at')
 
-    def __new__(_cls, name, sent_at, started_at, succeeded_at, failed_at):
-        'Create new instance of TaskRecord(name, sent_at, started_at, succeeded_at, failed_at)'
-        return _tuple.__new__(_cls, (name, sent_at, started_at, succeeded_at, failed_at))
+    def __new__(_cls, name, sent_at, started_at, succeeded_at, failed_at, received_at):
+        'Create new instance of TaskRecord(name, sent_at, started_at, succeeded_at, failed_at, received_at)'
+        return tuple.__new__(_cls, (name, sent_at, started_at, succeeded_at, failed_at, received_at))
 
     @classmethod
     def _make(cls, iterable, new=tuple.__new__, len=len):
         'Make a new TaskRecord object from a sequence or iterable'
         result = new(cls, iterable)
-        if len(result) != 5:
-            raise TypeError('Expected 5 arguments, got %d' % len(result))
+        if len(result) != 6:
+            raise TypeError('Expected 6 arguments, got %d' % len(result))
         return result
 
     def _replace(_self, **kwds):
         'Return a new TaskRecord object replacing specified fields with new values'
-        result = _self._make(map(kwds.pop, ('name', 'sent_at', 'started_at', 'succeeded_at', 'failed_at'), _self))
+        result = _self._make(map(kwds.pop, ('name', 'sent_at', 'started_at', 'succeeded_at', 'failed_at', 'received_at'), _self))
         if kwds:
             raise ValueError('Got unexpected field names: %r' % list(kwds))
         return result
 
     def __repr__(self):
         'Return a nicely formatted representation string'
-        return self.__class__.__name__ + '(name=%r, sent_at=%r, started_at=%r, succeeded_at=%r, failed_at=%r)' % self
+        return self.__class__.__name__ + '(name=%r, sent_at=%r, started_at=%r, succeeded_at=%r, failed_at=%r, received_at=%r)' % self
 
     def _asdict(self):
         'Return a new OrderedDict which maps field names to their values.'
@@ -192,15 +219,17 @@ class TaskRecord(tuple):
         'Return self as a plain tuple.  Used by copy and pickle.'
         return tuple(self)
 
-    name = _property(_itemgetter(0), doc='Alias for field number 0')
+    name = property(_itemgetter(0), doc='Alias for field number 0')
 
-    sent_at = _property(_itemgetter(1), doc='Alias for field number 1')
+    sent_at = property(_itemgetter(1), doc='Alias for field number 1')
 
-    started_at = _property(_itemgetter(2), doc='Alias for field number 2')
+    started_at = property(_itemgetter(2), doc='Alias for field number 2')
 
-    succeeded_at = _property(_itemgetter(3), doc='Alias for field number 3')
+    succeeded_at = property(_itemgetter(3), doc='Alias for field number 3')
 
-    failed_at = _property(_itemgetter(4), doc='Alias for field number 4')
+    failed_at = property(_itemgetter(4), doc='Alias for field number 4')
+
+    received_at = property(_itemgetter(5), doc='Alias for field number 5')
 
     @property
     def started(self):
@@ -208,7 +237,8 @@ class TaskRecord(tuple):
 
     @property
     def wait_duration(self):
-        return self.started_at - self.sent_at
+        sent_at = self.received_at if self.sent_at is None else self.sent_at
+        return self.started_at - sent_at
 
     @property
     def finished(self):

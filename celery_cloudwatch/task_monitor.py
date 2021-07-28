@@ -30,6 +30,7 @@ class TaskMonitor(object):
             camera.install()
             recv = app.events.Receiver(connection, handlers={
                 'task-sent': self.proxy_event('task-sent',state.task_sent),
+                'task-received': self.proxy_event('task-sent', state.task_received),
                 'task-started': self.proxy_event('task-started', state.task_started),
                 'task-succeeded': self.proxy_event('task-succeeded', state.task_succeeded),
                 'task-failed': self.proxy_event('task-failed', state.task_failed)

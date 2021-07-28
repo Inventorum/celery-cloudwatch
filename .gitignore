@@ -32,3 +32,5 @@ coverage.xml
 # Utilities (eg, autoenv)
 .env
 .bumpversion.cfg
+.idea/
+venv/

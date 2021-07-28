@@ -1,5 +1,6 @@
 import argparse
 import os
+import environ
 import voluptuous as v
 import yaml
 import six
@@ -7,6 +8,11 @@ import logging
 import logging.config
 
 from . import TaskMonitor
+
+env = environ.Env(
+    # set casting, default value
+    DEBUG=(bool, False)
+)
 
 v_str = v.Any(*six.string_types)
 
@@ -76,8 +82,12 @@ def main():
     #  lets just run it through twice, to make sure everything is set.
     config = config_schema(config_schema(config))
     config_ccwatch = config['ccwatch']
+    broker_url = env.url("CELERY_BROKER_URL").geturl()
+    print(broker_url)
+    print(config_ccwatch)
+    print(config)
     options = {
-        'broker': config_ccwatch.get('broker'),
+        'broker': broker_url,
         'camera': config_ccwatch.get('camera'),
         'verbose': config_ccwatch.get('verbose'),
         'config': config

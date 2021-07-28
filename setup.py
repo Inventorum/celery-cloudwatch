@@ -32,7 +32,7 @@ setup(
     keywords='celery cloudwatch monitor stats',
 
     packages=find_packages(exclude=('tests',)),
-    python_requires='>= 3.6',
+    python_requires='>= 2.7',
 
     setup_requires=[],
     install_requires=[
